@@ -16,6 +16,11 @@ Use this checklist before creating a release tag.
 - Build production bundle: `cd frontend && npm run build`
 - Verify `NEXT_PUBLIC_CONTRACT_ID` is set for the target environment
 
+## Communications
+
+- For planned downtime, use [maintenance-window-announcement-template.md](./maintenance-window-announcement-template.md)
+- For production incidents, follow [production-escalation.md](./production-escalation.md)
+
 ## Release
 
 - Update release notes/changelog for user-facing and contract changes

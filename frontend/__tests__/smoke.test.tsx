@@ -140,6 +140,123 @@ describe("Home page render states", () => {
     expect(screen.queryByRole("heading", { name: "Job #1" })).not.toBeInTheDocument();
   });
 
+  it("marks newly loaded jobs after refresh and clears after view", async () => {
+    mockGetJobCount.mockResolvedValue(1);
+    mockGetJob.mockResolvedValue({
+      client: "GCLIENT",
+      freelancer: null,
+      amount: "10000000",
+      description_hash: "hash-one",
+      status: "Open",
+      created_at: "1710000001",
+      deadline: "0",
+      token: "GTOKEN",
+      revision_count: 0,
+    });
+
+    render(<HomePage />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Job #1" })).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("New")).not.toBeInTheDocument();
+
+    mockGetJobCount.mockResolvedValue(2);
+    mockGetJob
+      .mockResolvedValueOnce({
+        client: "GCLIENT",
+        freelancer: null,
+        amount: "25000000",
+        description_hash: "hash-two",
+        status: "Open",
+        created_at: "1710000000",
+        deadline: "0",
+        token: "GTOKEN",
+        revision_count: 0,
+      })
+      .mockResolvedValueOnce({
+        client: "GCLIENT",
+        freelancer: null,
+        amount: "10000000",
+        description_hash: "hash-one",
+        status: "Open",
+        created_at: "1710000001",
+        deadline: "0",
+        token: "GTOKEN",
+        revision_count: 0,
+      });
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("1 new job since last refresh")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("New")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("link", { name: /Job #2/i }));
+
+    await waitFor(() => expect(screen.queryByText("New")).not.toBeInTheDocument());
+  });
+
+  it("shows new job indicators with favorites filter applied", async () => {
+    mockGetJobCount.mockResolvedValue(1);
+    mockGetJob.mockResolvedValue({
+      client: "GCLIENT",
+      freelancer: null,
+      amount: "10000000",
+      description_hash: "hash-one",
+      status: "Open",
+      created_at: "1710000001",
+      deadline: "0",
+      token: "GTOKEN",
+      revision_count: 0,
+    });
+
+    render(<HomePage />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Job #1" })).toBeInTheDocument(),
+    );
+
+    mockGetJobCount.mockResolvedValue(2);
+    mockGetJob
+      .mockResolvedValueOnce({
+        client: "GCLIENT",
+        freelancer: null,
+        amount: "25000000",
+        description_hash: "hash-two",
+        status: "Open",
+        created_at: "1710000000",
+        deadline: "0",
+        token: "GTOKEN",
+        revision_count: 0,
+      })
+      .mockResolvedValueOnce({
+        client: "GCLIENT",
+        freelancer: null,
+        amount: "10000000",
+        description_hash: "hash-one",
+        status: "Open",
+        created_at: "1710000001",
+        deadline: "0",
+        token: "GTOKEN",
+        revision_count: 0,
+      });
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(screen.getByText("New")).toBeInTheDocument());
+
+    const bookmarkButtons = screen.getAllByRole("button", { name: "Bookmark" });
+    fireEvent.click(bookmarkButtons[0]);
+    fireEvent.click(screen.getByLabelText("Favorites only"));
+
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Job #2" })).toBeInTheDocument(),
+    );
+    expect(screen.getByText("New")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Job #1" })).not.toBeInTheDocument();
+  });
+
   it("announces result counts without duplicate spam", async () => {
     mockGetJobCount.mockResolvedValue(1);
     mockGetJob.mockResolvedValue({

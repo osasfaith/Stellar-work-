@@ -10,7 +10,7 @@ import { getExplorerTxUrl } from "@/lib/stellar";
 import type { Job } from "@/lib/types";
 import { useWallet } from "@/lib/wallet-context";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const BOOKMARK_STORAGE_KEY = "stellarwork:bookmarked-jobs";
 
@@ -29,6 +29,9 @@ export default function HomePage() {
   const [bookmarkedIds, setBookmarkedIds] = useState<number[]>([]);
   const [resultsAnnouncement, setResultsAnnouncement] = useState("");
   const [lastAnnouncedSignature, setLastAnnouncedSignature] = useState("");
+  const [newJobIds, setNewJobIds] = useState<Set<number>>(() => new Set());
+  const seenJobIdsRef = useRef<Set<number>>(new Set());
+  const isInitialLoadRef = useRef(true);
 
   const totalPages = useMemo(
     () => Math.max(1, Math.ceil(totalJobs / pageSize)),
@@ -101,7 +104,22 @@ export default function HomePage() {
           item !== null && item.job.status === "Open",
       );
 
-      // Update jobs only after new data is ready to prevent flicker
+      const incomingIds = fetched.map(({ id }) => id);
+      if (!isInitialLoadRef.current) {
+        const addedIds = incomingIds.filter((id) => !seenJobIdsRef.current.has(id));
+        if (addedIds.length > 0) {
+          setNewJobIds((prev) => {
+            const next = new Set(prev);
+            for (const id of addedIds) {
+              next.add(id);
+            }
+            return next;
+          });
+        }
+      }
+      seenJobIdsRef.current = new Set(incomingIds);
+      isInitialLoadRef.current = false;
+
       setJobs(fetched);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to fetch jobs.");
@@ -174,6 +192,20 @@ export default function HomePage() {
     return "Description unavailable (posted from another device)";
   }
 
+  function markJobViewed(id: number) {
+    setNewJobIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }
+
+  const visibleNewJobCount = useMemo(
+    () => visibleJobs.filter(({ id }) => newJobIds.has(id)).length,
+    [newJobIds, visibleJobs],
+  );
+
   return (
     <section className="space-y-6">
       <div className="flex items-center justify-between">
@@ -195,6 +227,12 @@ export default function HomePage() {
       {loading && jobs.length > 0 && (
         <p role="status" aria-live="polite" className="text-xs text-slate-400">
           Refreshing jobs…
+        </p>
+      )}
+
+      {!loading && visibleNewJobCount > 0 && (
+        <p role="status" className="text-xs font-medium text-emerald-700">
+          {visibleNewJobCount} new job{visibleNewJobCount === 1 ? "" : "s"} since last refresh
         </p>
       )}
       <p role="status" aria-live="polite" aria-atomic="true" className="sr-only">
@@ -271,8 +309,19 @@ export default function HomePage() {
         {visibleJobs.map(({ id, job }) => (
           <li key={id}>
             <article className="h-full rounded-lg border border-slate-200 bg-white p-4 transition-shadow hover:shadow-md">
-              <Link href={`/job/${id}`} className="block">
-                <h2 className="text-lg font-medium hover:underline">Job #{id}</h2>
+              <Link
+                href={`/job/${id}`}
+                className="block"
+                onClick={() => markJobViewed(id)}
+              >
+                <h2 className="flex items-center gap-2 text-lg font-medium hover:underline">
+                  Job #{id}
+                  {newJobIds.has(id) && (
+                    <span className="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">
+                      New
+                    </span>
+                  )}
+                </h2>
               </Link>
               <p className="mt-2 flex min-w-0 items-baseline gap-1 text-sm font-bold text-slate-700">
                 <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap tabular-nums">
@@ -293,6 +342,7 @@ export default function HomePage() {
                 <Link
                   href={`/job/${id}`}
                   className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  onClick={() => markJobViewed(id)}
                 >
                   View Details
                 </Link>

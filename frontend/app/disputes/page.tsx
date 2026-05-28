@@ -5,116 +5,14 @@ import { useModalFocusTrap } from "@/lib/modal";
 import { useWallet } from "@/lib/wallet-context";
 import EmptyState from "@/components/EmptyState";
 import SectionCard from "@/components/SectionCard";
-
-// ─── Types ───────────────────────────────────────────────────────────────────
+import {
+  loadDisputesPageData,
+  type Dispute,
+  type DisputeStatus,
+  type EligibleJob,
+} from "@/lib/disputes-loader";
 
 type Role = "client" | "freelancer" | "admin";
-
-type DisputeStatus =
-  | "Active"
-  | "Resolved"
-  | "PendingEvidence"
-  | "UnderReview"
-  | "Closed";
-
-interface Dispute {
-  id: string;
-  jobId: string;
-  jobTitle: string;
-  client: string;
-  freelancer: string;
-  amount: number;
-  raisedBy: "client" | "freelancer";
-  raisedAt: string;
-  status: DisputeStatus;
-  reason: string;
-  evidence?: string;
-  resolution?: {
-    resolvedAt: string;
-    clientShare: number;
-    freelancerShare: number;
-    note: string;
-  };
-}
-
-interface EligibleJob {
-  id: string;
-  title: string;
-  counterparty: string;
-  amount: number;
-}
-
-// ─── Mock Data ────────────────────────────────────────────────────────────────
-
-const MOCK_DISPUTES: Dispute[] = [
-  {
-    id: "D-001",
-    jobId: "J-104",
-    jobTitle: "Smart Contract Audit — DeFi Protocol",
-    client: "BlockVentures LLC",
-    freelancer: "0xDev.eth",
-    amount: 4200,
-    raisedBy: "client",
-    raisedAt: "2025-04-18T09:22:00Z",
-    status: "UnderReview",
-    reason: "Delivered audit missed three critical vulnerabilities found by a third party.",
-    evidence: "Audit report diff, third-party findings attached.",
-  },
-  {
-    id: "D-002",
-    jobId: "J-098",
-    jobTitle: "NFT Marketplace Frontend",
-    client: "ArtChain Studio",
-    freelancer: "pixel.labs",
-    amount: 2800,
-    raisedBy: "freelancer",
-    raisedAt: "2025-04-12T14:05:00Z",
-    status: "Active",
-    reason: "Client has not approved final deliverable despite meeting all specs.",
-    evidence: "Spec doc signed off, delivery screenshots included.",
-  },
-  {
-    id: "D-003",
-    jobId: "J-091",
-    jobTitle: "Tokenomics Whitepaper",
-    client: "NovaCoin Foundation",
-    freelancer: "dr.tokenomics",
-    amount: 1500,
-    raisedBy: "client",
-    raisedAt: "2025-03-30T11:40:00Z",
-    status: "Resolved",
-    reason: "Whitepaper contained significant factual errors requiring full revision.",
-    resolution: {
-      resolvedAt: "2025-04-08T16:20:00Z",
-      clientShare: 40,
-      freelancerShare: 60,
-      note: "Partial refund agreed — work was largely complete but needed corrections.",
-    },
-  },
-  {
-    id: "D-004",
-    jobId: "J-087",
-    jobTitle: "DAO Governance Module",
-    client: "Collective3",
-    freelancer: "rustchain.dev",
-    amount: 7500,
-    raisedBy: "freelancer",
-    raisedAt: "2025-03-22T08:15:00Z",
-    status: "Closed",
-    reason: "Payment withheld after scope expansion was verbally agreed.",
-    resolution: {
-      resolvedAt: "2025-04-01T10:00:00Z",
-      clientShare: 10,
-      freelancerShare: 90,
-      note: "Evidence of scope expansion accepted. Freelancer awarded full revised amount.",
-    },
-  },
-];
-
-const MOCK_ELIGIBLE_JOBS: EligibleJob[] = [
-  { id: "J-112", title: "Solidity Gas Optimisation", counterparty: "GasHawks Inc.", amount: 960 },
-  { id: "J-108", title: "Web3 Dashboard Redesign", counterparty: "UX3 Studio", amount: 1800 },
-];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -148,7 +46,11 @@ function StatusBadge({ status }: { status: DisputeStatus }) {
 
 function Spinner() {
   return (
-    <div className="flex items-center justify-center py-16">
+    <div
+      role="status"
+      aria-label="Loading disputes"
+      className="flex items-center justify-center py-16"
+    >
       <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-200 border-t-slate-700" />
     </div>
   );
@@ -586,27 +488,31 @@ export default function DisputesPage() {
     }
   }, [wallet]);
 
-  // Simulate data fetch
-  useEffect(() => {
+  const loadDisputes = useCallback(async () => {
     if (!wallet) {
+      setDisputes([]);
+      setEligibleJobs([]);
       setLoading(false);
+      setError("");
       return;
     }
 
     setLoading(true);
-    const t = setTimeout(() => {
-      try {
-        setError("");
-        setDisputes(MOCK_DISPUTES);
-        setEligibleJobs(MOCK_ELIGIBLE_JOBS);
-        setLoading(false);
-      } catch {
-        setError("Failed to load disputes. Please try again.");
-        setLoading(false);
-      }
-    }, 800);
-    return () => clearTimeout(t);
-  }, [role, wallet]);
+    setError("");
+    try {
+      const data = await loadDisputesPageData();
+      setDisputes(data.disputes);
+      setEligibleJobs(data.eligibleJobs);
+    } catch {
+      setError("Failed to load disputes. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }, [wallet]);
+
+  useEffect(() => {
+    void loadDisputes();
+  }, [loadDisputes, role]);
 
   // Toast auto-dismiss
   useEffect(() => {
@@ -719,10 +625,7 @@ export default function DisputesPage() {
               {(["client", "freelancer", "admin"] as Role[]).map(r => (
                 <button
                   key={r}
-                  onClick={() => {
-                    setLoading(true);
-                    setRole(r);
-                  }}
+                  onClick={() => setRole(r)}
                   className={`rounded-md px-3 py-1.5 font-medium capitalize transition-colors ${
                     role === r ? "bg-slate-900 text-white" : "text-slate-500 hover:text-slate-800"
                   }`}
@@ -775,7 +678,9 @@ export default function DisputesPage() {
         ) : error ? (
           <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}{" "}
-            <button className="underline" onClick={() => setLoading(true)}>Retry</button>
+            <button type="button" className="underline" onClick={() => void loadDisputes()}>
+              Retry
+            </button>
           </div>
         ) : filteredDisputes.length === 0 ? (
           <EmptyState
