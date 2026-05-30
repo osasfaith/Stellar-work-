@@ -377,6 +377,26 @@ export default function HomePage() {
               List
             </button>
           </div>
+          <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
+            <button
+              type="button"
+              className="rounded-md border border-slate-300 bg-white px-3 py-1 font-medium text-slate-700 hover:bg-slate-50"
+              onClick={() => {
+                // Clear localStorage preferences
+                localStorage.removeItem(BOOKMARK_STORAGE_KEY);
+                // Clear sessionStorage preferences
+                sessionStorage.removeItem(VIEW_MODE_STORAGE_KEY);
+                // Reset state to defaults immediately
+                setBookmarkedIds([]);
+                setViewMode("grid");
+                setShowBookmarkedOnly(false);
+                setSortOrder("newest");
+                setPage(1);
+              }}
+            >
+              Reset Preferences
+            </button>
+          </div>
         </fieldset>
       </SectionCard>
 

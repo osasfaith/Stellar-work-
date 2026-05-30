@@ -43,7 +43,7 @@ export default function RootLayout({
           </a>
           <Navigation />
           <ScrollRestorer />
-          <main id="main-content" className="mx-auto w-full max-w-5xl flex-1 px-4 py-8">{children}</main>
+          <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-5xl flex-1 px-4 py-8">{children}</main>
           <footer className="mt-auto border-t border-slate-200 bg-white py-8">
             <div className="mx-auto max-w-5xl px-4">
               <div className="flex flex-col items-center justify-between gap-6 md:flex-row">

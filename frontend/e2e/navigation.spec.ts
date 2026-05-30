@@ -25,4 +25,30 @@ test.describe("Navigation", () => {
     const skipLink = page.getByRole("link", { name: "Skip to main content" });
     await expect(skipLink).toBeVisible();
   });
+
+  test("skip link should move focus to main content", async ({ page }) => {
+    await page.goto("/");
+    const skipLink = page.getByRole("link", { name: "Skip to main content" });
+    
+    // Click the skip link
+    await skipLink.click();
+    
+    // Verify focus is on the main content element
+    const mainContent = page.locator("#main-content");
+    await expect(mainContent).toBeFocused();
+  });
+
+  test("skip link should work across routes", async ({ page }) => {
+    // Test on dashboard route
+    await page.goto("/dashboard");
+    const skipLink = page.getByRole("link", { name: "Skip to main content" });
+    await skipLink.click();
+    const mainContent = page.locator("#main-content");
+    await expect(mainContent).toBeFocused();
+
+    // Test on post-job route
+    await page.goto("/post-job");
+    await skipLink.click();
+    await expect(mainContent).toBeFocused();
+  });
 });

@@ -281,4 +281,41 @@ describe("Home page render states", () => {
       expect(screen.getByText("1 result shown")).toBeInTheDocument(),
     );
   });
+
+  it("resets preferences and restores defaults", async () => {
+    // Set up initial preferences
+    localStorage.setItem("stellarwork:bookmarked-jobs", JSON.stringify([1, 2, 3]));
+    sessionStorage.setItem("stellarwork:jobs-view-mode", "list");
+
+    mockGetJobCount.mockResolvedValue(1);
+    mockGetJob.mockResolvedValue({
+      client: "GCLIENT",
+      freelancer: null,
+      amount: "10000000",
+      description_hash: "hash-one",
+      status: "Open",
+      created_at: "1710000001",
+      deadline: "0",
+      token: "GTOKEN",
+      revision_count: 0,
+    });
+
+    render(<HomePage />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Job #1" })).toBeInTheDocument(),
+    );
+
+    // Verify preferences were loaded
+    expect(localStorage.getItem("stellarwork:bookmarked-jobs")).toBe("[1,2,3]");
+    expect(sessionStorage.getItem("stellarwork:jobs-view-mode")).toBe("list");
+
+    // Click reset button
+    fireEvent.click(screen.getByRole("button", { name: "Reset Preferences" }));
+
+    // Verify localStorage was cleared
+    expect(localStorage.getItem("stellarwork:bookmarked-jobs")).toBeNull();
+    // Verify sessionStorage was cleared
+    expect(sessionStorage.getItem("stellarwork:jobs-view-mode")).toBeNull();
+  });
 });
