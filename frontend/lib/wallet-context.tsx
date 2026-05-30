@@ -6,6 +6,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useRef,
   type ReactNode,
 } from "react";
 import {
@@ -31,6 +32,7 @@ const WalletContext = createContext<WalletContextType>({
 
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [wallet, setWallet] = useState<string | null>(null);
+  const connectPromiseRef = useRef<Promise<string> | null>(null);
 
   useEffect(() => {
     getPublicKey().then((key) => {
@@ -39,9 +41,19 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const connectWallet = useCallback(async () => {
-    const key = await stellarConnectWallet();
+    if (wallet) {
+      return;
+    }
+
+    if (!connectPromiseRef.current) {
+      connectPromiseRef.current = stellarConnectWallet().finally(() => {
+        connectPromiseRef.current = null;
+      });
+    }
+
+    const key = await connectPromiseRef.current;
     setWallet(key);
-  }, []);
+  }, [wallet]);
 
   const disconnectWallet = useCallback(() => {
     setWallet(null);

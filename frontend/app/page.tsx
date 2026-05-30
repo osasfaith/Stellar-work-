@@ -6,12 +6,18 @@ import JobCardSkeleton from "@/components/JobCardSkeleton";
 import SectionCard from "@/components/SectionCard";
 import { acceptJob, getJob, getJobCount } from "@/lib/contract";
 import { formatDeadline, toXlm } from "@/lib/format";
+import {
+  clearRecentSearches,
+  loadRecentSearches,
+  saveRecentSearches,
+  updateRecentSearches,
+} from "@/lib/recent-searches";
 import { getExplorerTxUrl } from "@/lib/stellar";
 import { getRecentJobIds, getJobWindowBounds } from "@/lib/recent-ids";
 import type { Job } from "@/lib/types";
 import { useWallet } from "@/lib/wallet-context";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 const BOOKMARK_STORAGE_KEY = "stellarwork:bookmarked-jobs";
 const VIEW_MODE_STORAGE_KEY = "stellarwork:jobs-view-mode";
@@ -37,6 +43,8 @@ export default function HomePage() {
   const [sortOrder, setSortOrder] = useState<"newest" | "oldest">("newest");
   const [showBookmarkedOnly, setShowBookmarkedOnly] = useState(false);
   const [bookmarkedIds, setBookmarkedIds] = useState<number[]>([]);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [recentSearches, setRecentSearches] = useState<string[] | null>(null);
   const [resultsAnnouncement, setResultsAnnouncement] = useState("");
   const [lastAnnouncedSignature, setLastAnnouncedSignature] = useState("");
   const [newJobIds, setNewJobIds] = useState<Set<number>>(() => new Set());
@@ -75,6 +83,15 @@ export default function HomePage() {
   useEffect(() => {
     localStorage.setItem(BOOKMARK_STORAGE_KEY, JSON.stringify(bookmarkedIds));
   }, [bookmarkedIds]);
+
+  useEffect(() => {
+    setRecentSearches(loadRecentSearches());
+  }, []);
+
+  useEffect(() => {
+    if (recentSearches === null) return;
+    saveRecentSearches(recentSearches);
+  }, [recentSearches]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -149,23 +166,41 @@ export default function HomePage() {
     void refresh();
   }, [refresh]);
 
-  const visibleJobs = useMemo(
-    () =>
-      showBookmarkedOnly
-        ? jobs.filter(({ id }) => bookmarkedIds.includes(id))
-        : jobs,
-    [bookmarkedIds, jobs, showBookmarkedOnly],
-  );
+  const normalizedSearchTerm = searchTerm.trim().toLowerCase();
+
+  const visibleJobs = useMemo(() => {
+    const bookmarkedJobs = showBookmarkedOnly
+      ? jobs.filter(({ id }) => bookmarkedIds.includes(id))
+      : jobs;
+
+    if (!normalizedSearchTerm) {
+      return bookmarkedJobs;
+    }
+
+    return bookmarkedJobs.filter(({ id, job }) => {
+      const description = getDescription(job.description_hash).toLowerCase();
+      const amount = toXlm(job.amount).toLowerCase();
+      const freelancer = job.freelancer?.toLowerCase() ?? "";
+      return [
+        String(id),
+        job.description_hash.toLowerCase(),
+        description,
+        amount,
+        job.client.toLowerCase(),
+        freelancer,
+      ].some((value) => value.includes(normalizedSearchTerm));
+    });
+  }, [bookmarkedIds, jobs, normalizedSearchTerm, showBookmarkedOnly]);
 
   useEffect(() => {
     if (loading) return;
-    const currentSignature = `${showBookmarkedOnly}:${visibleJobs.map(({ id }) => id).join(",")}`;
+    const currentSignature = `${showBookmarkedOnly}:${normalizedSearchTerm}:${visibleJobs.map(({ id }) => id).join(",")}`;
     if (currentSignature === lastAnnouncedSignature) return;
     setResultsAnnouncement(
       `${visibleJobs.length} ${visibleJobs.length === 1 ? "result" : "results"} shown`,
     );
     setLastAnnouncedSignature(currentSignature);
-  }, [lastAnnouncedSignature, loading, showBookmarkedOnly, visibleJobs]);
+  }, [lastAnnouncedSignature, loading, normalizedSearchTerm, showBookmarkedOnly, visibleJobs]);
 
   function getDescription(hash: string): string {
     const stored = localStorage.getItem(`job-desc:${hash}`);
@@ -181,6 +216,30 @@ export default function HomePage() {
       return next;
     });
   }
+
+  const handleSearchSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const term = searchTerm.trim();
+    if (!term) return;
+    setRecentSearches((current) => updateRecentSearches(current ?? [], term));
+    setPage(1);
+  };
+
+  const handleRecentSearchSelect = (term: string) => {
+    setSearchTerm(term);
+    setRecentSearches((current) => updateRecentSearches(current ?? [], term));
+    setPage(1);
+  };
+
+  const handleClearSearch = () => {
+    setSearchTerm("");
+    setPage(1);
+  };
+
+  const handleClearSearchHistory = () => {
+    setRecentSearches([]);
+    clearRecentSearches();
+  };
 
   const visibleNewJobCount = useMemo(
     () => visibleJobs.filter(({ id }) => newJobIds.has(id)).length,
@@ -234,9 +293,12 @@ export default function HomePage() {
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
       {loading && jobs.length === 0 && (
-        <div className="grid gap-4 md:grid-cols-2" aria-label="Loading open jobs">
+        <div
+          className={viewMode === "list" ? "flex flex-col gap-4" : "grid gap-4 md:grid-cols-2"}
+          aria-label="Loading open jobs"
+        >
           {Array.from({ length: 6 }).map((_, index) => (
-            <JobCardSkeleton key={index} />
+            <JobCardSkeleton key={index} compact={viewMode === "list"} />
           ))}
         </div>
       )}
@@ -272,11 +334,19 @@ export default function HomePage() {
 
       {!loading && visibleJobs.length === 0 && !error && (
         <EmptyState
-          title={showBookmarkedOnly ? "No favorites found" : "No open jobs found"}
+          title={
+            normalizedSearchTerm
+              ? "No jobs match your search"
+              : showBookmarkedOnly
+                ? "No favorites found"
+                : "No open jobs found"
+          }
           description={
-            showBookmarkedOnly
-              ? "Bookmark jobs to quickly find them here."
-              : "New jobs will appear here as clients post them."
+            normalizedSearchTerm
+              ? "Try a different keyword or clear your search history."
+              : showBookmarkedOnly
+                ? "Bookmark jobs to quickly find them here."
+                : "New jobs will appear here as clients post them."
           }
         />
       )}
@@ -285,6 +355,73 @@ export default function HomePage() {
         title="Jobs Display"
         description="Default sort is newest first."
       >
+        <form onSubmit={handleSearchSubmit} className="space-y-3 rounded-md border border-slate-200 p-3">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+            <label className="flex-1 text-sm text-slate-600">
+              <span className="block font-medium text-slate-700">Search jobs</span>
+              <input
+                type="search"
+                value={searchTerm}
+                onChange={(event) => {
+                  setSearchTerm(event.target.value);
+                  setPage(1);
+                }}
+                placeholder="Search by ID, description, wallet, or amount"
+                className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2"
+              />
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="submit"
+                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={!searchTerm.trim()}
+              >
+                Search
+              </button>
+              <button
+                type="button"
+                onClick={handleClearSearch}
+                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={!searchTerm}
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+          {(recentSearches?.length ?? 0) > 0 && (
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                  Recent searches
+                </p>
+                <button
+                  type="button"
+                  onClick={handleClearSearchHistory}
+                  className="text-xs font-medium text-slate-600 hover:text-slate-900"
+                >
+                  Clear history
+                </button>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {(recentSearches ?? []).map((term) => (
+                  <button
+                    key={term}
+                    type="button"
+                    onClick={() => handleRecentSearchSelect(term)}
+                    className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                      searchTerm.trim().toLowerCase() === term.toLowerCase()
+                        ? "border-slate-900 bg-slate-900 text-white"
+                        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    {term}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </form>
+
         <fieldset className="space-y-3 rounded-md border border-slate-200 p-3">
           <legend className="px-1 text-sm font-medium text-slate-700">
             Sort and filter job results
@@ -360,6 +497,7 @@ export default function HomePage() {
                 setBookmarkedIds([]);
                 setViewMode("grid");
                 setShowBookmarkedOnly(false);
+                setSearchTerm("");
                 setSortOrder("newest");
                 setPage(1);
               }}

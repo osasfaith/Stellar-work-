@@ -103,9 +103,11 @@ export default function DashboardPage() {
     successMessage = "Action completed successfully.",
   ) => {
     setActionLoading(jobId);
+    setError(null);
     try {
       await fn();
       await fetchJobs();
+      setError(null);
       showSuccess(successMessage);
     } catch (e) {
       const message = e instanceof Error ? e.message : "Action failed.";
