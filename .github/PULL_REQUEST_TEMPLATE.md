@@ -2,6 +2,10 @@
 
 Closes #
 
+## PR Title
+
+This PR title follows the [Conventional Commits](https://www.conventionalcommits.org/) format as required by CI. See [PR Title Conventions](docs/pr-title-conventions.md) for details.
+
 ## What Changed
 
 Describe the main changes and any relevant design trade-offs.
