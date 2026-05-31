@@ -311,14 +311,13 @@ export default function HomePage() {
       {loading && jobs.length === 0 && (
         <div className="space-y-4">
           <p className="text-sm text-slate-600">Loading jobs...</p>
-          <div className="grid gap-4 md:grid-cols-2" aria-label="Loading open jobs">
-        <div
-          className={viewMode === "list" ? "flex flex-col gap-4" : "grid gap-4 md:grid-cols-2"}
-          aria-label="Loading open jobs"
-        >
-          {Array.from({ length: 6 }).map((_, index) => (
-            <JobCardSkeleton key={index} compact={viewMode === "list"} />
-          ))}
+          <div
+            className={viewMode === "list" ? "flex flex-col gap-4" : "grid gap-4 md:grid-cols-2"}
+            aria-label="Loading open jobs"
+          >
+            {Array.from({ length: 6 }).map((_, index) => (
+              <JobCardSkeleton key={index} compact={viewMode === "list"} />
+            ))}
           </div>
         </div>
       )}
@@ -353,37 +352,31 @@ export default function HomePage() {
       )}
 
       {!loading && visibleJobs.length === 0 && !error && (
-        <>
-          {showBookmarkedOnly && jobs.length > 0 ? (
-            <NoResultsState
-              title="No favorites found"
-              description="No bookmarked jobs match the current feed. Turn off favorites only to see everything again."
-              actionLabel="Show all jobs"
-              onAction={() => setShowBookmarkedOnly(false)}
-            />
-          ) : (
-            <EmptyState
-              title="No open jobs found"
-              description="New jobs will appear here as clients post them."
-            />
-          )}
-        </>
-        <EmptyState
-          title={
-            normalizedSearchTerm
-              ? "No jobs match your search"
-              : showBookmarkedOnly
-                ? "No favorites found"
-                : "No open jobs found"
-          }
-          description={
-            normalizedSearchTerm
-              ? "Try a different keyword or clear your search history."
-              : showBookmarkedOnly
-                ? "Bookmark jobs to quickly find them here."
-                : "New jobs will appear here as clients post them."
-          }
-        />
+        showBookmarkedOnly && jobs.length > 0 && !normalizedSearchTerm ? (
+          <NoResultsState
+            title="No favorites found"
+            description="No bookmarked jobs match the current feed. Turn off favorites only to see everything again."
+            actionLabel="Show all jobs"
+            onAction={() => setShowBookmarkedOnly(false)}
+          />
+        ) : (
+          <EmptyState
+            title={
+              normalizedSearchTerm
+                ? "No jobs match your search"
+                : showBookmarkedOnly
+                  ? "No favorites found"
+                  : "No open jobs found"
+            }
+            description={
+              normalizedSearchTerm
+                ? "Try a different keyword or clear your search history."
+                : showBookmarkedOnly
+                  ? "Bookmark jobs to quickly find them here."
+                  : "New jobs will appear here as clients post them."
+            }
+          />
+        )
       )}
 
       <SectionCard
