@@ -12,7 +12,7 @@ import type { Job } from "@/lib/types";
 import { useWallet } from "@/lib/wallet-context";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export default function JobDetailPage() {
   const params = useParams<{ id: string }>();
@@ -27,6 +27,7 @@ export default function JobDetailPage() {
   const [latestTxHash, setLatestTxHash] = useState<string | null>(null);
   const [invalidId, setInvalidId] = useState(false);
   const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const numericId = Number(id);
   const isIdValid = !isNaN(numericId) && numericId > 0 && Number.isInteger(numericId);
@@ -64,6 +65,14 @@ export default function JobDetailPage() {
       setShowCancelConfirm(false);
     }
   }, [wallet]);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const isClient = wallet && job && wallet === job.client;
   const isFreelancer = wallet && job && wallet === job.freelancer;
@@ -120,8 +129,14 @@ export default function JobDetailPage() {
   async function copyToClipboard(text: string) {
     try {
       await navigator.clipboard.writeText(text);
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      copyTimeoutRef.current = setTimeout(() => {
+        setCopied(false);
+        copyTimeoutRef.current = null;
+      }, 2000);
     } catch (err) {
       console.error("Failed to copy!", err);
     }

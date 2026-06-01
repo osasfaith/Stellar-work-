@@ -2024,6 +2024,14 @@ mod test {
     }
 
     #[test]
+    fn post_job_payload_under_limit_accepted() {
+        let (env, client, admin, user, _, native_token) = setup();
+        client.set_desc_payload_max(&admin, &64u32);
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &63u32, &0u64, &native_token);
+        assert_eq!(job_id, 1);
+    }
+
+    #[test]
     #[should_panic(expected = "Error(Contract, #17)")]
     fn post_job_payload_above_limit_rejected() {
         let (env, client, admin, user, _, native_token) = setup();

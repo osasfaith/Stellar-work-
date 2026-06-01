@@ -4,6 +4,7 @@ import { WalletProvider } from "@/lib/wallet-context";
 import { ToastProvider } from "@/components/ToastProvider";
 import { Navigation } from "./navigation";
 import { ScrollRestorer } from "@/components/ScrollRestorer";
+import CommandPalette from "@/components/CommandPalette";
 import Link from "next/link";
 import "./globals.css";
 
@@ -42,6 +43,7 @@ export default function RootLayout({
             Skip to main content
           </a>
           <Navigation />
+          <CommandPalette />
           <ScrollRestorer />
           <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-5xl flex-1 px-4 py-8">{children}</main>
           <footer className="mt-auto border-t border-slate-200 bg-white py-8">
