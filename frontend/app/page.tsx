@@ -481,6 +481,7 @@ export default function HomePage() {
                 checked={showBookmarkedOnly}
                 onChange={(event) => {
                   setShowBookmarkedOnly(event.target.checked);
+                  setPage(1);
                 }}
                 className="h-4 w-4 rounded border-slate-300"
               />
