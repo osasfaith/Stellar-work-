@@ -1281,6 +1281,33 @@ mod test {
     }
 
     #[test]
+    fn only_assigned_freelancer_can_submit_in_progress_job() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+
+        let accepted = client.get_job(&job_id);
+        assert_eq!(accepted.status, JobStatus::InProgress);
+        assert_eq!(accepted.freelancer, Option::Some(freelancer.clone()));
+
+        let non_assigned = Address::generate(&env);
+        expect_panic_with_contract_error(|| client.submit_work(&non_assigned, &job_id), 2);
+
+        let after_failed_submit = client.get_job(&job_id);
+        assert_eq!(after_failed_submit.status, JobStatus::InProgress);
+        assert_eq!(
+            after_failed_submit.freelancer,
+            Option::Some(freelancer.clone())
+        );
+
+        client.submit_work(&freelancer, &job_id);
+
+        let submitted = client.get_job(&job_id);
+        assert_eq!(submitted.status, JobStatus::SubmittedForReview);
+        assert_eq!(submitted.freelancer, Option::Some(freelancer));
+    }
+
+    #[test]
     #[should_panic(expected = "Error(Contract, #3)")]
     fn submit_work_on_open_job_panics() {
         let (env, client, _, user, _, native_token) = setup();
