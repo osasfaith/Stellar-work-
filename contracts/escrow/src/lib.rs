@@ -949,6 +949,24 @@ mod test {
     }
 
     #[test]
+    fn post_job_positive_amount_escrows_posted_amount() {
+        let (env, client, _, user, _, native_token) = setup();
+        let token_client = token::Client::new(&env, &native_token);
+        let contract_address = client.address.clone();
+        let amount = 1_250_000i128;
+
+        let pre_client_balance = token_client.balance(&user);
+        let pre_contract_balance = token_client.balance(&contract_address);
+        let job_id = client.post_job(&user, &amount, &hash(&env), &32u32, &0u64, &native_token);
+
+        let posted = client.get_job(&job_id);
+        assert_eq!(posted.status, JobStatus::Open);
+        assert_eq!(posted.amount, amount);
+        assert_eq!(token_client.balance(&user), pre_client_balance - amount);
+        assert_eq!(token_client.balance(&contract_address), pre_contract_balance + amount);
+    }
+
+    #[test]
     fn accept_and_approve_happy_path() {
         let (env, client, _, user, freelancer, native_token) = setup();
         let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
