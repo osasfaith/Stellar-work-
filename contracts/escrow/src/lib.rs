@@ -353,6 +353,49 @@ impl EscrowContract {
             .publish((Symbol::new(&e, "deadline_enforced"),), (job_id, client));
     }
 
+    pub fn mutual_cancel(
+        e: Env,
+        client: Address,
+        freelancer: Address,
+        job_id: u64,
+        client_share_bps: i128,
+    ) {
+        client.require_auth();
+        freelancer.require_auth();
+
+        let mut job = get_job_or_panic(&e, job_id);
+
+        if job.status != JobStatus::InProgress && job.status != JobStatus::SubmittedForReview {
+            panic_with_error!(&e, Error::InvalidStatus);
+        }
+        if job.client != client || job.freelancer != Option::Some(freelancer.clone()) {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
+        if client_share_bps < 0 || client_share_bps > BPS_DENOMINATOR {
+            panic_with_error!(&e, Error::InvalidAmount);
+        }
+
+        let client_share = checked_mul_div(&e, job.amount, client_share_bps, BPS_DENOMINATOR);
+        let freelancer_share = checked_sub(&e, job.amount, client_share);
+
+        job.status = JobStatus::Cancelled;
+        set_job(&e, job_id, &job);
+        bump_instance_ttl(&e);
+
+        let token_client = token::Client::new(&e, &job.token);
+        if client_share > 0 {
+            token_client.transfer(&e.current_contract_address(), &client, &client_share);
+        }
+        if freelancer_share > 0 {
+            token_client.transfer(&e.current_contract_address(), &freelancer, &freelancer_share);
+        }
+
+        e.events().publish(
+            (Symbol::new(&e, "job_mutually_cancelled"),),
+            (job_id, client, freelancer, client_share, freelancer_share),
+        );
+    }
+
     pub fn extend_job_ttl(e: Env, caller: Address, job_id: u64) {
         caller.require_auth();
         let job = get_job_or_panic(&e, job_id);
@@ -2439,6 +2482,34 @@ mod test {
         assert_eq!(client.get_cancelled_jobs_count(), 0);
         client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 10_000 });
         assert_eq!(client.get_cancelled_jobs_count(), 1);
+    }
+
+    #[test]
+    fn mutual_cancel_happy_path() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.accept_job(&freelancer, &job_id);
+
+        let token_client = token::Client::new(&env, &native_token);
+        let user_pre = token_client.balance(&user);
+        let freelancer_pre = token_client.balance(&freelancer);
+
+        // 60/40 split
+        client.mutual_cancel(&user, &freelancer, &job_id, &6_000i128);
+
+        assert_eq!(token_client.balance(&user) - user_pre, 600_000);
+        assert_eq!(token_client.balance(&freelancer) - freelancer_pre, 400_000);
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Cancelled);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn client_cannot_accept_own_job() {
+        let (env, client, _, user, _, native_token) = setup();
+        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        
+        // Client tries to accept their own job
+        client.accept_job(&user, &job_id);
     }
 
     #[test]
