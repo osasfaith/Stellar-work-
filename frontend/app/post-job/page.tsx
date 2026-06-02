@@ -140,7 +140,7 @@ export default function PostJobPage() {
               hashHex,
               descriptionPayloadLen,
               deadlineUnix,
-              tokenAddress,
+              tokenAddress.trim(),
             );
             if (result.hash) {
               setTxHash(result.hash);
@@ -188,7 +188,7 @@ export default function PostJobPage() {
           <input
             className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2"
             type="number"
-            min="0"
+            min="0.0000001"
             step="0.0000001"
             value={amount}
             onChange={(e) => {
