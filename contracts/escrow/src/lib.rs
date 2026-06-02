@@ -3554,4 +3554,58 @@ mod test {
         assert_eq!(token_client.balance(&freelancer) - pre_balance, 975_000);
         assert_eq!(client.get_fees(&native_token), 25_000);
     }
+
+    // ── SC-TEST-20 (#299): approve_work unauthorized client ───────────────────
+    //
+    // Only the job client may approve submitted work and release payment.
+    //   • The client succeeds after a valid submit (job completes).
+    //   • A non-client caller — including an unrelated third party, not just
+    //     the freelancer — fails with Unauthorized (#2).
+    //   • On a valid approval, funds flow correctly out of escrow: the
+    //     freelancer is paid net of fees, the fee is retained, and the escrow
+    //     balance is fully conserved (nothing left stranded).
+
+    /// A completely unrelated third party (neither client nor freelancer)
+    /// cannot approve_work. The status check passes on a SubmittedForReview
+    /// job, so the contract's `job.client != client` guard is what rejects
+    /// the caller with `Error::Unauthorized` (#2).
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn approve_work_by_unrelated_third_party_fails_unauthorized() {
+        let (env, client, _user, _freelancer, _native_token, job_id) = submitted_job();
+        let stranger = Address::generate(&env);
+        client.approve_work(&stranger, &job_id);
+    }
+
+    /// On a valid client approval the funds flow is fully accounted for:
+    /// the freelancer receives `amount - fee`, the fee is retained as
+    /// platform fees, and the escrow contract's balance drops by exactly
+    /// the full job amount (payout + fee). No tokens are stranded.
+    #[test]
+    fn approve_work_completes_job_and_funds_flow() {
+        let (env, client, user, freelancer, native_token, job_id) = submitted_job();
+
+        let token_client = token::Client::new(&env, &native_token);
+        let contract_address = client.address.clone();
+
+        let freelancer_pre = token_client.balance(&freelancer);
+        let escrow_pre = token_client.balance(&contract_address);
+        let fees_pre = client.get_fees(&native_token);
+
+        client.approve_work(&user, &job_id);
+
+        // 1_000_000 amount, 25_000 fee (DEFAULT_FEE_BPS) → 975_000 payout.
+        let payout = 975_000i128;
+        let fee = 25_000i128;
+
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Completed);
+        // Freelancer paid net of fee.
+        assert_eq!(token_client.balance(&freelancer) - freelancer_pre, payout);
+        // Fee retained by the platform.
+        assert_eq!(client.get_fees(&native_token) - fees_pre, fee);
+        // Escrow released the full amount; payout + fee == amount, so the
+        // contract balance drops by the payout only (the fee stays in escrow
+        // as accrued fees, not transferred out).
+        assert_eq!(escrow_pre - token_client.balance(&contract_address), payout);
+    }
 }
