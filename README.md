@@ -2,6 +2,12 @@
 
 StellarWork is an open-source decentralized freelance marketplace on Stellar. Payments are held in Soroban escrow and released by state transitions, not platform custody logic.
 
+Organization: [Stelllar-Works](https://github.com/Stelllar-Works)
+
+```bash
+git clone https://github.com/Stelllar-Works/Stellar-work-.git
+```
+
 ## Repository Layout
 
 ```
