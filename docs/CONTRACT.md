@@ -12,10 +12,11 @@ Location: `contracts/escrow/src/lib.rs`
 - `get_job(job_id)`
 - `get_job_count()`
 
-## Stubbed (Contributor Scope)
+## Implemented (Contributor Scope)
 
-- `raise_dispute(job_id)` — not implemented
-- `resolve_dispute(job_id, winner)` — not implemented
+- `raise_dispute(job_id, evidence_hash, reason_preview)` — raises a dispute with optional evidence
+- `resolve_dispute(job_id, resolution)` — resolves a disputed job with basis-point split
+- `get_dispute_evidence(job_id)` — retrieves evidence for a disputed job
 
 ## Data Model
 
@@ -37,6 +38,20 @@ Location: `contracts/escrow/src/lib.rs`
 
 - `JobStatus`: `Open`, `InProgress`, `SubmittedForReview`, `Completed`, `Cancelled`, `Disputed`
 
+### `DisputeEvidence` struct
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `evidence_hash` | `BytesN<32>` | SHA-256 hash of the off-chain evidence payload. Zero hash means no evidence provided. |
+| `raised_at` | `u64` | Unix timestamp when the dispute was raised (set by `e.ledger().timestamp()`). |
+| `reason_preview` | `BytesN<64>` | Short on-chain reason snippet (up to 64 bytes) for indexer display without off-chain resolution. |
+
+### `DisputeResolution` struct
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `client_bps` | `u32` | Basis-points share for the client (0–10,000). 10,000 = full refund, 0 = full payout to freelancer. |
+
 ## Error Codes
 
 - `1` JobNotFound
@@ -45,4 +60,14 @@ Location: `contracts/escrow/src/lib.rs`
 - `4` InsufficientFunds
 - `5` JobAlreadyAccepted
 - `6` DeadlinePassed
-- `7` AlreadyInitialized
+- `7` DeadlineNotExpired
+- `8` TokenNotAllowed
+- `9` FeeTooHigh
+- `10` AlreadyInitialized
+- `11` InvalidAmount
+- `12` InvalidDescriptionHash
+- `13` UnauthorizedAdmin
+- `14` InvalidDeadline
+- `15` ActiveJobLimitExceeded
+- `16` RevisionLimitReached
+- `17` DescriptionPayloadTooLarge
