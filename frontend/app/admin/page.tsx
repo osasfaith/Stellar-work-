@@ -76,7 +76,7 @@ export default function AdminPage() {
 
   const [activeTab, setActiveTab] = useState<ActiveTab>("overview");
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
-  const [fees, setFees] = useState<bigint>(0n);
+  const [fees, setFees] = useState<number>(0);
   const [nativeToken, setNativeToken] = useState<string>("");
   const [jobs, setJobs] = useState<Array<{ id: number; job: Job }>>([]);
   const [loading, setLoading] = useState(true);
@@ -105,7 +105,7 @@ export default function AdminPage() {
       setNativeToken(token);
 
       const accrued = await getFees(token);
-      setFees(BigInt(accrued));
+      setFees(accrued);
 
       const count = await getJobCount();
       const fetched: Array<{ id: number; job: Job }> = [];
@@ -157,7 +157,7 @@ export default function AdminPage() {
     } else {
       setLoading(false);
       setIsAdmin(null);
-      setFees(0n);
+      setFees(0);
       setJobs([]);
       setError(null);
       setSuccessMessage(null);
@@ -178,7 +178,7 @@ export default function AdminPage() {
     try {
       await withdrawFees(nativeToken);
       setSuccessMessage(`Successfully withdrew ${toXlm(fees)} XLM in fees.`);
-      setFees(0n);
+      setFees(0);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Withdraw failed.";
       if (msg.includes("Unauthorized") || msg.includes("#2")) {
@@ -350,7 +350,7 @@ export default function AdminPage() {
               WithdrawFees operation.
             </p>
             <button
-              disabled={withdrawing || fees <= 0n}
+              disabled={withdrawing || fees <= 0}
               className="mt-4 rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
               onClick={handleWithdraw}
             >
