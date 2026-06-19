@@ -13,13 +13,14 @@ const signTransactionSpy = vi.fn();
 const isAllowedMock = vi.fn();
 const getAddressMock = vi.fn();
 const requestAccessMock = vi.fn();
+void requestAccessMock; // used in mock
 
 class FakeAccount {
   constructor(public id: string, public sequence: string) {}
   accountId() {
     return this.id;
   }
-  incrementSequenceNumber() {}
+  incrementSequenceNumber() { /* noop */ }
   sequenceNumber() {
     return this.sequence;
   }

@@ -17,7 +17,7 @@ vi.mock("@stellar/stellar-sdk", () => ({
   Account: class {
     constructor(public id: string, public sequence: string) {}
     accountId() { return this.id; }
-    incrementSequenceNumber() {}
+    incrementSequenceNumber() { /* noop */ }
     sequenceNumber() { return this.sequence; }
   },
   BASE_FEE: "100",

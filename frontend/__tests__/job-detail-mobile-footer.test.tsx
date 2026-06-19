@@ -243,7 +243,7 @@ describe("Job Detail Mobile Footer", () => {
 
     // Mock acceptJob to simulate loading state
     const { acceptJob } = await import("@/lib/contract");
-    vi.mocked(acceptJob).mockImplementation(() => new Promise(() => {})); // Never resolves
+    vi.mocked(acceptJob).mockImplementation(() => new Promise(() => { /* pending */ })); // Never resolves
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;
     render(<JobDetailPage />);

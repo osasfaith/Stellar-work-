@@ -60,7 +60,7 @@ describe("Job detail loading state", () => {
 
   it("shows the loading indicator while getJob is pending", () => {
     // A promise that never resolves keeps the component in the fetching state
-    mockGetJob.mockReturnValue(new Promise(() => {}));
+    mockGetJob.mockReturnValue(new Promise(() => { /* pending */ }));
     renderJobPage();
 
     const status = screen.getByRole("status");
@@ -69,7 +69,7 @@ describe("Job detail loading state", () => {
   });
 
   it("does not render job content while fetch is still pending", () => {
-    mockGetJob.mockReturnValue(new Promise(() => {}));
+    mockGetJob.mockReturnValue(new Promise(() => { /* pending */ }));
     renderJobPage();
 
     expect(screen.queryByText("Job #42")).not.toBeInTheDocument();
@@ -78,7 +78,7 @@ describe("Job detail loading state", () => {
   });
 
   it("does not render the error state while fetch is still pending", () => {
-    mockGetJob.mockReturnValue(new Promise(() => {}));
+    mockGetJob.mockReturnValue(new Promise(() => { /* pending */ }));
     renderJobPage();
 
     expect(screen.queryByText("Job not found.")).not.toBeInTheDocument();
