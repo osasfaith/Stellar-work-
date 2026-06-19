@@ -4,7 +4,6 @@ import {
   Account,
   BASE_FEE,
   Contract,
-  Keypair,
   Networks,
   nativeToScVal,
   rpc,
@@ -137,11 +136,11 @@ export async function callContract(
   const signedTx = TransactionBuilder.fromXDR(signedXdr, networkPassphrase);
   const sent = await server.sendTransaction(signedTx);
 
-  if (sent.status === rpc.Api.SendTransactionStatus.ERROR) {
+  if (sent.status === "ERROR") {
     throw new Error(sent.errorResult?.toXDR().toString() ?? "Contract invocation failed.");
   }
 
-  if (sent.status === rpc.Api.SendTransactionStatus.PENDING) {
+  if (sent.status === "PENDING") {
     const pollTimeout = options?.pollTimeout ?? DEFAULT_POLL_TIMEOUT;
     const pollInterval = DEFAULT_POLL_INTERVAL;
     const startTime = Date.now();

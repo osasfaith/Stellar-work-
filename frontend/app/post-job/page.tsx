@@ -136,7 +136,7 @@ export default function PostJobPage() {
             localStorage.setItem(`job-desc:${hashHex}`, trimmedDescription);
             const result = await postJob(
               wallet,
-              amountStroops,
+              amountStroops!,
               hashHex,
               descriptionPayloadLen,
               deadlineUnix,

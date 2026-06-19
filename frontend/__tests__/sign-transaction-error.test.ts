@@ -17,6 +17,7 @@ vi.mock("@stellar/stellar-sdk", () => ({
   Account: class {
     constructor(public id: string, public sequence: string) {}
     accountId() { return this.id; }
+    // eslint-disable-next-line @typescript-eslint/no-empty-function
     incrementSequenceNumber() {}
     sequenceNumber() { return this.sequence; }
   },

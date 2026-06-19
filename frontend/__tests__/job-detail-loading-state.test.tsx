@@ -60,6 +60,7 @@ describe("Job detail loading state", () => {
 
   it("shows the loading indicator while getJob is pending", () => {
     // A promise that never resolves keeps the component in the fetching state
+    // eslint-disable-next-line @typescript-eslint/no-empty-function
     mockGetJob.mockReturnValue(new Promise(() => {}));
     renderJobPage();
 
@@ -69,6 +70,7 @@ describe("Job detail loading state", () => {
   });
 
   it("does not render job content while fetch is still pending", () => {
+    // eslint-disable-next-line @typescript-eslint/no-empty-function
     mockGetJob.mockReturnValue(new Promise(() => {}));
     renderJobPage();
 
@@ -78,6 +80,7 @@ describe("Job detail loading state", () => {
   });
 
   it("does not render the error state while fetch is still pending", () => {
+    // eslint-disable-next-line @typescript-eslint/no-empty-function
     mockGetJob.mockReturnValue(new Promise(() => {}));
     renderJobPage();
 

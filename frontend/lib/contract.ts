@@ -1,7 +1,7 @@
 "use client";
 
-import { callContract, nativeToScVal } from "@/lib/stellar";
-import type { Job } from "@/lib/types";
+import { callContract, nativeToScVal, xdr } from "@/lib/stellar";
+import type { AdminOperationTag, Job, TimelockedOperation } from "@/lib/types";
 
 export function hexToBytes(hex: string): Uint8Array {
   const normalized = hex.startsWith("0x") ? hex.slice(2) : hex;
@@ -186,6 +186,94 @@ export async function getJobCount(): Promise<number> {
     {
       readOnly: true,
     },
+  );
+  return Number(response.data ?? 0);
+}
+
+// ── Timelocked governance ─────────────────────────────────────────────────────
+
+function encodeAdminOperation(tag: AdminOperationTag, value: unknown): xdr.ScVal {
+  let encodedValue: xdr.ScVal;
+  switch (tag) {
+    case "UpdateFeeBps":
+      encodedValue = nativeToScVal(BigInt(value as string | number), { type: "i128" });
+      break;
+    case "TransferAdmin":
+    case "AddAllowedToken":
+    case "RemoveAllowedToken":
+    case "WithdrawFees":
+      encodedValue = nativeToScVal(value as string, { type: "address" });
+      break;
+    case "SetDescPayloadMax":
+    case "SetMaxActiveJobsPerClient":
+      encodedValue = nativeToScVal(Number(value), { type: "u32" });
+      break;
+    case "UpdateTimelockDelay":
+      encodedValue = nativeToScVal(BigInt(value as string | number), { type: "u64" });
+      break;
+    default:
+      throw new Error(`Unknown AdminOperation tag: ${tag}`);
+  }
+  return xdr.ScVal.scvMap([
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol(tag),
+      val: encodedValue,
+    }),
+  ]);
+}
+
+export async function proposeOperation(
+  caller: string,
+  tag: AdminOperationTag,
+  value: unknown,
+): Promise<number> {
+  const operation = encodeAdminOperation(tag, value);
+  const response = await callContract(requireContractId(), "propose_operation", [
+    nativeToScVal(caller, { type: "address" }),
+    operation,
+  ]);
+  return Number(response.data ?? 0);
+}
+
+export async function executeOperation(opId: string) {
+  return callContract(requireContractId(), "execute_operation", [
+    nativeToScVal(opId, { type: "u64" }),
+  ]);
+}
+
+export async function cancelOperation(caller: string, opId: string) {
+  return callContract(requireContractId(), "cancel_operation", [
+    nativeToScVal(caller, { type: "address" }),
+    nativeToScVal(opId, { type: "u64" }),
+  ]);
+}
+
+export async function getOperation(opId: string): Promise<TimelockedOperation | null> {
+  const response = await callContract(
+    requireContractId(),
+    "get_operation",
+    [nativeToScVal(opId, { type: "u64" })],
+    { readOnly: true },
+  );
+  return (response.data as TimelockedOperation) ?? null;
+}
+
+export async function getTimelockDelay(): Promise<number> {
+  const response = await callContract(
+    requireContractId(),
+    "get_timelock_delay",
+    [],
+    { readOnly: true },
+  );
+  return Number(response.data ?? 3600);
+}
+
+export async function getProposalsCount(): Promise<number> {
+  const response = await callContract(
+    requireContractId(),
+    "get_proposals_count",
+    [],
+    { readOnly: true },
   );
   return Number(response.data ?? 0);
 }

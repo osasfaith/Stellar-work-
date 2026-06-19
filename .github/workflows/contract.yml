@@ -17,8 +17,8 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
-          components: rustfmt
+          targets: wasm32-unknown-unknown,wasm32v1-none
+          components: rustfmt,rust-src
 
       - name: Check formatting
         working-directory: contracts/escrow/
@@ -37,11 +37,19 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Install system dependencies
+        run: sudo apt-get update -q && sudo apt-get install -y pkg-config libdbus-1-dev libudev-dev
+
       - name: Install soroban-cli
         run: |
           if ! command -v soroban &> /dev/null; then
             cargo install soroban-cli --locked
           fi
+
+      - name: Ensure wasm32 targets are available
+        run: |
+          rustup target add wasm32-unknown-unknown
+          rustup target add wasm32v1-none
 
       - name: Build contract
         working-directory: contracts/escrow/

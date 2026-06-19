@@ -21,6 +21,34 @@ const ACTIVE_JOB_LIFETIME_THRESHOLD: u32 = 17_280;
 const ACTIVE_JOB_BUMP_AMOUNT: u32 = 518_400;
 const ARCHIVAL_JOB_BUMP_AMOUNT: u32 = 120_960;
 
+const MIN_TIMELOCK_DELAY: u64 = 3_600;
+const DEFAULT_TIMELOCK_DELAY: u64 = 3_600;
+const OPERATION_EXPIRY: u64 = 2_592_000;
+
+#[contracttype]
+#[derive(Clone)]
+pub enum AdminOperation {
+    UpdateFeeBps(i128),
+    TransferAdmin(Address),
+    SetDescPayloadMax(u32),
+    SetMaxActiveJobsPerClient(u32),
+    AddAllowedToken(Address),
+    RemoveAllowedToken(Address),
+    WithdrawFees(Address),
+    UpdateTimelockDelay(u64),
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct TimelockedOperation {
+    pub proposer: Address,
+    pub operation: AdminOperation,
+    pub proposed_at: u64,
+    pub earliest_execution: u64,
+    pub executed: bool,
+    pub cancelled: bool,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum JobStatus {
@@ -73,6 +101,9 @@ pub enum DataKey {
     FeeBps,
     DescriptionPayloadMaxBytes,
     MaxActiveJobsPerClient,
+    ProposalsCount,
+    Proposal(u64),
+    TimelockDelay,
 }
 
 #[contracterror]
@@ -96,6 +127,12 @@ pub enum Error {
     InvalidDeadline = 14,
     ActiveJobLimitExceeded = 15,
     DescriptionPayloadTooLarge = 17,
+    OperationNotFound = 18,
+    OperationAlreadyExecuted = 19,
+    OperationCancelled = 20,
+    OperationNotReady = 21,
+    OperationExpired = 22,
+    DelayBelowMinimum = 23,
 }
 
 #[contract]
@@ -387,7 +424,11 @@ impl EscrowContract {
             token_client.transfer(&e.current_contract_address(), &client, &client_share);
         }
         if freelancer_share > 0 {
-            token_client.transfer(&e.current_contract_address(), &freelancer, &freelancer_share);
+            token_client.transfer(
+                &e.current_contract_address(),
+                &freelancer,
+                &freelancer_share,
+            );
         }
 
         e.events().publish(
@@ -720,6 +761,108 @@ impl EscrowContract {
     pub fn is_token_allowed(e: Env, token: Address) -> bool {
         e.storage().persistent().has(&DataKey::AllowedToken(token))
     }
+
+    // ── Timelocked governance ─────────────────────────────────────────────────
+
+    pub fn propose_operation(e: Env, caller: Address, operation: AdminOperation) -> u64 {
+        caller.require_auth();
+        let admin = load_admin(&e);
+        if caller != admin {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
+
+        let delay = get_timelock_delay_storage(&e);
+        let now = e.ledger().timestamp();
+        let earliest_execution = now.saturating_add(delay);
+
+        let op_id = next_proposal_id(&e);
+        let op = TimelockedOperation {
+            proposer: caller.clone(),
+            operation,
+            proposed_at: now,
+            earliest_execution,
+            executed: false,
+            cancelled: false,
+        };
+
+        e.storage().persistent().set(&DataKey::Proposal(op_id), &op);
+        e.storage().persistent().extend_ttl(
+            &DataKey::Proposal(op_id),
+            ACTIVE_JOB_LIFETIME_THRESHOLD,
+            INSTANCE_BUMP_AMOUNT,
+        );
+        bump_instance_ttl(&e);
+
+        e.events().publish(
+            (Symbol::new(&e, "operation_proposed"),),
+            (op_id, caller, earliest_execution),
+        );
+
+        op_id
+    }
+
+    pub fn execute_operation(e: Env, op_id: u64) {
+        let mut op = load_operation_or_panic(&e, op_id);
+
+        if op.executed {
+            panic_with_error!(&e, Error::OperationAlreadyExecuted);
+        }
+        if op.cancelled {
+            panic_with_error!(&e, Error::OperationCancelled);
+        }
+
+        let now = e.ledger().timestamp();
+        if now < op.earliest_execution {
+            panic_with_error!(&e, Error::OperationNotReady);
+        }
+        if now > op.proposed_at.saturating_add(OPERATION_EXPIRY) {
+            panic_with_error!(&e, Error::OperationExpired);
+        }
+
+        op.executed = true;
+        e.storage().persistent().set(&DataKey::Proposal(op_id), &op);
+        bump_instance_ttl(&e);
+
+        apply_operation(&e, &op.operation);
+
+        e.events()
+            .publish((Symbol::new(&e, "operation_executed"),), (op_id, now));
+    }
+
+    pub fn cancel_operation(e: Env, caller: Address, op_id: u64) {
+        caller.require_auth();
+        let admin = load_admin(&e);
+        if caller != admin {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
+
+        let mut op = load_operation_or_panic(&e, op_id);
+        if op.executed {
+            panic_with_error!(&e, Error::OperationAlreadyExecuted);
+        }
+        if op.cancelled {
+            panic_with_error!(&e, Error::OperationCancelled);
+        }
+
+        op.cancelled = true;
+        e.storage().persistent().set(&DataKey::Proposal(op_id), &op);
+        bump_instance_ttl(&e);
+
+        e.events()
+            .publish((Symbol::new(&e, "operation_cancelled"),), (op_id, caller));
+    }
+
+    pub fn get_operation(e: Env, op_id: u64) -> TimelockedOperation {
+        load_operation_or_panic(&e, op_id)
+    }
+
+    pub fn get_timelock_delay(e: Env) -> u64 {
+        get_timelock_delay_storage(&e)
+    }
+
+    pub fn get_proposals_count(e: Env) -> u64 {
+        get_proposals_count_storage(&e)
+    }
 }
 
 fn is_active_job_status(status: &JobStatus) -> bool {
@@ -873,6 +1016,107 @@ fn get_token_fees(e: &Env, token: &Address) -> i128 {
         .unwrap_or(0)
 }
 
+fn next_proposal_id(e: &Env) -> u64 {
+    let count = get_proposals_count_storage(e);
+    let next = count + 1;
+    e.storage().instance().set(&DataKey::ProposalsCount, &next);
+    next
+}
+
+fn get_proposals_count_storage(e: &Env) -> u64 {
+    e.storage()
+        .instance()
+        .get::<DataKey, u64>(&DataKey::ProposalsCount)
+        .unwrap_or(0)
+}
+
+fn get_timelock_delay_storage(e: &Env) -> u64 {
+    e.storage()
+        .instance()
+        .get::<DataKey, u64>(&DataKey::TimelockDelay)
+        .unwrap_or(DEFAULT_TIMELOCK_DELAY)
+}
+
+fn load_operation_or_panic(e: &Env, op_id: u64) -> TimelockedOperation {
+    e.storage()
+        .persistent()
+        .get::<DataKey, TimelockedOperation>(&DataKey::Proposal(op_id))
+        .unwrap_or_else(|| panic_with_error!(e, Error::OperationNotFound))
+}
+
+fn apply_operation(e: &Env, operation: &AdminOperation) {
+    match operation {
+        AdminOperation::UpdateFeeBps(new_fee_bps) => {
+            let fee = *new_fee_bps;
+            if fee <= 0 || fee > MAX_FEE_BPS_CONFIG {
+                panic_with_error!(e, Error::InvalidAmount);
+            }
+            e.storage().instance().set(&DataKey::FeeBps, &fee);
+            e.events().publish((Symbol::new(e, "fee_updated"),), (fee,));
+        }
+        AdminOperation::TransferAdmin(new_admin) => {
+            e.storage().instance().set(&DataKey::Admin, new_admin);
+            e.events()
+                .publish((Symbol::new(e, "admin_transferred"),), (new_admin.clone(),));
+        }
+        AdminOperation::SetDescPayloadMax(max_bytes) => {
+            let mb = *max_bytes;
+            if mb < MIN_DESCRIPTION_PAYLOAD_MAX_BYTES || mb > MAX_DESCRIPTION_PAYLOAD_MAX_BYTES {
+                panic_with_error!(e, Error::InvalidAmount);
+            }
+            e.storage()
+                .instance()
+                .set(&DataKey::DescriptionPayloadMaxBytes, &mb);
+        }
+        AdminOperation::SetMaxActiveJobsPerClient(limit) => {
+            let lim = *limit;
+            e.storage()
+                .instance()
+                .set(&DataKey::MaxActiveJobsPerClient, &lim);
+            e.events()
+                .publish((Symbol::new(e, "max_active_jobs_updated"),), (lim,));
+        }
+        AdminOperation::AddAllowedToken(token) => {
+            e.storage()
+                .persistent()
+                .set(&DataKey::AllowedToken(token.clone()), &true);
+            e.storage().persistent().extend_ttl(
+                &DataKey::AllowedToken(token.clone()),
+                ACTIVE_JOB_LIFETIME_THRESHOLD,
+                INSTANCE_BUMP_AMOUNT,
+            );
+        }
+        AdminOperation::RemoveAllowedToken(token) => {
+            e.storage()
+                .persistent()
+                .remove(&DataKey::AllowedToken(token.clone()));
+        }
+        AdminOperation::WithdrawFees(token) => {
+            let fees = get_token_fees(e, token);
+            if fees > 0 {
+                e.storage()
+                    .persistent()
+                    .set(&DataKey::TokenFees(token.clone()), &0i128);
+                bump_token_fees_ttl(e, token);
+                let admin = load_admin(e);
+                let token_client = token::Client::new(e, token);
+                token_client.transfer(&e.current_contract_address(), &admin, &fees);
+                e.events()
+                    .publish((Symbol::new(e, "fees_withdrawn"),), (token.clone(), fees));
+            }
+        }
+        AdminOperation::UpdateTimelockDelay(new_delay) => {
+            let delay = *new_delay;
+            if delay < MIN_TIMELOCK_DELAY {
+                panic_with_error!(e, Error::DelayBelowMinimum);
+            }
+            e.storage().instance().set(&DataKey::TimelockDelay, &delay);
+            e.events()
+                .publish((Symbol::new(e, "delay_updated"),), (delay,));
+        }
+    }
+}
+
 fn checked_add(e: &Env, left: i128, right: i128) -> i128 {
     left.checked_add(right)
         .unwrap_or_else(|| panic_with_error!(e, Error::InsufficientFunds))
@@ -969,7 +1213,10 @@ mod test {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.initialize(&admin, &native_token);
         }));
-        assert!(result.is_err(), "re-init must panic with AlreadyInitialized");
+        assert!(
+            result.is_err(),
+            "re-init must panic with AlreadyInitialized"
+        );
 
         assert_eq!(
             client.get_job_count(),
@@ -1018,7 +1265,10 @@ mod test {
         assert_eq!(posted.status, JobStatus::Open);
         assert_eq!(posted.amount, amount);
         assert_eq!(token_client.balance(&user), pre_client_balance - amount);
-        assert_eq!(token_client.balance(&contract_address), pre_contract_balance + amount);
+        assert_eq!(
+            token_client.balance(&contract_address),
+            pre_contract_balance + amount
+        );
     }
 
     #[test]
@@ -1314,7 +1564,14 @@ mod test {
     #[test]
     fn only_assigned_freelancer_can_submit_in_progress_job() {
         let (env, client, _, user, freelancer, native_token) = setup();
-        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
         client.accept_job(&freelancer, &job_id);
 
         let accepted = client.get_job(&job_id);
@@ -2588,7 +2845,14 @@ mod test {
     #[test]
     fn mutual_cancel_happy_path() {
         let (env, client, _, user, freelancer, native_token) = setup();
-        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
         client.accept_job(&freelancer, &job_id);
 
         let token_client = token::Client::new(&env, &native_token);
@@ -2607,8 +2871,15 @@ mod test {
     #[should_panic(expected = "Error(Contract, #2)")]
     fn client_cannot_accept_own_job() {
         let (env, client, _, user, _, native_token) = setup();
-        let job_id = client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
-        
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+
         // Client tries to accept their own job
         client.accept_job(&user, &job_id);
     }
@@ -4637,7 +4908,14 @@ mod test {
     #[should_panic(expected = "Error(Contract, #1)")]
     fn accept_job_out_of_range_id_panics() {
         let (env, client, _, user, freelancer, native_token) = setup();
-        client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
         // Job ID 1 exists, ID 9999 does not — must be rejected.
         client.accept_job(&freelancer, &9999u64);
     }
@@ -4650,21 +4928,28 @@ mod test {
         let contract_address = client.address.clone();
 
         // Post one known job to establish baseline.
-        let job_id =
-            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
-        let escrow_before =
-            token::Client::new(&env, &native_token).balance(&contract_address);
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        let escrow_before = token::Client::new(&env, &native_token).balance(&contract_address);
         let job_before = client.get_job(&job_id);
 
         // Attempt accept_job on a non-existent ID — must panic.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.accept_job(&freelancer, &9999u64);
         }));
-        assert!(result.is_err(), "accept_job must panic on non-existent job ID");
+        assert!(
+            result.is_err(),
+            "accept_job must panic on non-existent job ID"
+        );
 
         // Escrow balance must be identical.
-        let escrow_after =
-            token::Client::new(&env, &native_token).balance(&contract_address);
+        let escrow_after = token::Client::new(&env, &native_token).balance(&contract_address);
         assert_eq!(
             escrow_after, escrow_before,
             "escrow balance must not change after failed accept_job"
@@ -4753,7 +5038,14 @@ mod test {
         let (env, client, _, user, _, native_token) = setup();
         // User has 10_000_000_000 from setup; this amount exceeds their balance.
         let huge_amount: i128 = 100_000_000_000_000i128;
-        client.post_job(&user, &huge_amount, &hash(&env), &32u32, &0u64, &native_token);
+        client.post_job(
+            &user,
+            &huge_amount,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
     }
 
     /// After a failed post_job due to insufficient balance, no job is
@@ -4810,8 +5102,14 @@ mod test {
     #[should_panic(expected = "Error(Contract, #3)")]
     fn approve_work_on_open_job_no_freelancer_fails() {
         let (env, client, _, user, _, native_token) = setup();
-        let job_id =
-            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
         // Job is Open — no freelancer has accepted. approve_work must fail.
         client.approve_work(&user, &job_id);
     }
@@ -4822,8 +5120,14 @@ mod test {
     #[test]
     fn approve_work_missing_freelancer_error_is_not_unauthorized() {
         let (env, client, _, user, _, native_token) = setup();
-        let job_id =
-            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
 
         // approve_work on an Open job must fail with InvalidStatus (#3),
         // NOT Unauthorized (#2) — the status/freelancer check comes first.
@@ -4862,8 +5166,14 @@ mod test {
         let contract_address = client.address.clone();
         let token_client = token::Client::new(&env, &native_token);
 
-        let job_id =
-            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
 
         let user_balance_before = token_client.balance(&user);
         let freelancer_balance_before = token_client.balance(&freelancer);
@@ -4920,8 +5230,14 @@ mod test {
         let (env, client, _, user, _, native_token) = setup();
         let expected_timestamp = env.ledger().timestamp();
 
-        let job_id =
-            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
         let job = client.get_job(&job_id);
 
         assert!(job.created_at > 0, "created_at must be non-zero");
@@ -4937,8 +5253,14 @@ mod test {
     fn job_created_at_unchanged_after_state_transitions() {
         let (env, client, _, user, freelancer, native_token) = setup();
 
-        let job_id =
-            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
         let created_at = client.get_job(&job_id).created_at;
 
         // accept_job must not change created_at
@@ -4974,8 +5296,14 @@ mod test {
         let base_time = env.ledger().timestamp();
 
         // Post first job
-        let id1 =
-            client.post_job(&user, &1_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        let id1 = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
         let job1 = client.get_job(&id1);
         assert_eq!(job1.created_at, base_time);
 
@@ -4985,8 +5313,14 @@ mod test {
         });
 
         // Post second job
-        let id2 =
-            client.post_job(&user, &2_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        let id2 = client.post_job(
+            &user,
+            &2_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
         let job2 = client.get_job(&id2);
         assert_eq!(job2.created_at, base_time + 100);
 
@@ -4996,8 +5330,14 @@ mod test {
         });
 
         // Post third job
-        let id3 =
-            client.post_job(&user, &3_000_000i128, &hash(&env), &32u32, &0u64, &native_token);
+        let id3 = client.post_job(
+            &user,
+            &3_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
         let job3 = client.get_job(&id3);
         assert_eq!(job3.created_at, base_time + 200);
 
@@ -5522,5 +5862,239 @@ mod test {
         // contract balance drops by the payout only (the fee stays in escrow
         // as accrued fees, not transferred out).
         assert_eq!(escrow_pre - token_client.balance(&contract_address), payout);
+    }
+
+    // ── Timelocked governance tests ──────────────────────────────────────────
+
+    #[test]
+    fn propose_operation_returns_sequential_id() {
+        let (_, client, admin, _, _, _) = setup();
+        let id1 = client.propose_operation(&admin, &AdminOperation::UpdateFeeBps(300i128));
+        let id2 = client.propose_operation(&admin, &AdminOperation::UpdateFeeBps(400i128));
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+        assert_eq!(client.get_proposals_count(), 2);
+    }
+
+    #[test]
+    fn propose_and_execute_update_fee_bps() {
+        let (env, client, admin, _, _, _) = setup();
+        let op_id = client.propose_operation(&admin, &AdminOperation::UpdateFeeBps(500i128));
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1_710_000_000 + DEFAULT_TIMELOCK_DELAY + 1;
+        });
+
+        client.execute_operation(&op_id);
+        assert_eq!(client.get_fee_bps(), 500);
+
+        let op = client.get_operation(&op_id);
+        assert!(op.executed);
+        assert!(!op.cancelled);
+    }
+
+    #[test]
+    fn propose_transfer_admin_via_timelock() {
+        let (env, client, admin, _, _, _) = setup();
+        let new_admin = Address::generate(&env);
+        let op_id =
+            client.propose_operation(&admin, &AdminOperation::TransferAdmin(new_admin.clone()));
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1_710_000_000 + DEFAULT_TIMELOCK_DELAY + 1;
+        });
+
+        client.execute_operation(&op_id);
+        assert_eq!(client.get_admin(), new_admin);
+    }
+
+    #[test]
+    fn propose_and_execute_add_allowed_token() {
+        let (env, client, admin, _, _, _) = setup();
+        let new_token_admin = Address::generate(&env);
+        let new_token = env
+            .register_stellar_asset_contract_v2(new_token_admin)
+            .address();
+
+        assert!(!client.is_token_allowed(&new_token));
+
+        let op_id =
+            client.propose_operation(&admin, &AdminOperation::AddAllowedToken(new_token.clone()));
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1_710_000_000 + DEFAULT_TIMELOCK_DELAY + 1;
+        });
+
+        client.execute_operation(&op_id);
+        assert!(client.is_token_allowed(&new_token));
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #19)")]
+    fn execute_operation_double_execution_fails() {
+        let (env, client, admin, _, _, _) = setup();
+        let op_id = client.propose_operation(&admin, &AdminOperation::UpdateFeeBps(500i128));
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1_710_000_000 + DEFAULT_TIMELOCK_DELAY + 1;
+        });
+
+        client.execute_operation(&op_id);
+        client.execute_operation(&op_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #21)")]
+    fn execute_operation_before_delay_fails() {
+        let (_, client, admin, _, _, _) = setup();
+        let op_id = client.propose_operation(&admin, &AdminOperation::UpdateFeeBps(500i128));
+        client.execute_operation(&op_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #22)")]
+    fn execute_operation_after_expiry_fails() {
+        let (env, client, admin, _, _, _) = setup();
+        let op_id = client.propose_operation(&admin, &AdminOperation::UpdateFeeBps(500i128));
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1_710_000_000 + OPERATION_EXPIRY + 1;
+        });
+
+        client.execute_operation(&op_id);
+    }
+
+    #[test]
+    fn cancel_operation_prevents_execution() {
+        let (env, client, admin, _, _, _) = setup();
+        let op_id = client.propose_operation(&admin, &AdminOperation::UpdateFeeBps(500i128));
+
+        client.cancel_operation(&admin, &op_id);
+
+        let op = client.get_operation(&op_id);
+        assert!(op.cancelled);
+        assert!(!op.executed);
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1_710_000_000 + DEFAULT_TIMELOCK_DELAY + 1;
+        });
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.execute_operation(&op_id);
+        }));
+        assert!(
+            result.is_err(),
+            "cancelled operation must not be executable"
+        );
+
+        assert_eq!(client.get_fee_bps(), DEFAULT_FEE_BPS);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #20)")]
+    fn execute_cancelled_operation_fails() {
+        let (env, client, admin, _, _, _) = setup();
+        let op_id = client.propose_operation(&admin, &AdminOperation::UpdateFeeBps(500i128));
+
+        client.cancel_operation(&admin, &op_id);
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1_710_000_000 + DEFAULT_TIMELOCK_DELAY + 1;
+        });
+
+        client.execute_operation(&op_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn cancel_operation_non_admin_fails() {
+        let (env, client, admin, _, _, _) = setup();
+        let op_id = client.propose_operation(&admin, &AdminOperation::UpdateFeeBps(500i128));
+        let stranger = Address::generate(&env);
+        client.cancel_operation(&stranger, &op_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn propose_operation_non_admin_fails() {
+        let (env, client, _, _, _, _) = setup();
+        let stranger = Address::generate(&env);
+        client.propose_operation(&stranger, &AdminOperation::UpdateFeeBps(500i128));
+    }
+
+    #[test]
+    fn update_timelock_delay_via_proposal() {
+        let (env, client, admin, _, _, _) = setup();
+        assert_eq!(client.get_timelock_delay(), DEFAULT_TIMELOCK_DELAY);
+
+        let new_delay: u64 = 7_200;
+        let op_id =
+            client.propose_operation(&admin, &AdminOperation::UpdateTimelockDelay(new_delay));
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1_710_000_000 + DEFAULT_TIMELOCK_DELAY + 1;
+        });
+
+        client.execute_operation(&op_id);
+        assert_eq!(client.get_timelock_delay(), new_delay);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #23)")]
+    fn update_timelock_delay_below_minimum_panics() {
+        let (env, client, admin, _, _, _) = setup();
+        let op_id = client.propose_operation(&admin, &AdminOperation::UpdateTimelockDelay(100u64));
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1_710_000_000 + DEFAULT_TIMELOCK_DELAY + 1;
+        });
+
+        client.execute_operation(&op_id);
+    }
+
+    #[test]
+    fn timelock_operation_events_emitted() {
+        let (env, client, admin, _, _, _) = setup();
+        let op_id = client.propose_operation(&admin, &AdminOperation::UpdateFeeBps(500i128));
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1_710_000_000 + DEFAULT_TIMELOCK_DELAY + 1;
+        });
+
+        client.execute_operation(&op_id);
+
+        let events = env.events().all();
+        assert!(events.len() >= 2);
+    }
+
+    #[test]
+    fn resolve_dispute_bypasses_timelock() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let token_client = token::Client::new(&env, &native_token);
+        let pre_balance = token_client.balance(&user);
+
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+        client.raise_dispute(&user, &job_id);
+
+        client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 10_000 });
+
+        let post_balance = token_client.balance(&user);
+        assert_eq!(post_balance, pre_balance);
+        assert_eq!(client.get_job(&job_id).status, JobStatus::Cancelled);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #18)")]
+    fn get_nonexistent_operation_fails() {
+        let (_, client, _, _, _, _) = setup();
+        client.get_operation(&999u64);
     }
 }
