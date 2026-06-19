@@ -60,6 +60,19 @@ pub struct DisputeResolution {
     pub client_bps: u32,
 }
 
+/// Evidence associated with a dispute.
+/// Stored on-chain with TTL managed like jobs.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeEvidence {
+    /// SHA-256 hash of the off-chain evidence payload.
+    pub evidence_hash: BytesN<32>,
+    /// Unix timestamp when the dispute was raised.
+    pub raised_at: u64,
+    /// Short on-chain reason snippet (up to 64 bytes) for indexer display.
+    pub reason_preview: BytesN<64>,
+}
+
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -73,6 +86,7 @@ pub enum DataKey {
     FeeBps,
     DescriptionPayloadMaxBytes,
     MaxActiveJobsPerClient,
+    DisputeEvidence(u64),
 }
 
 #[contracterror]
@@ -406,7 +420,13 @@ impl EscrowContract {
         bump_instance_ttl(&e);
     }
 
-    pub fn raise_dispute(e: Env, caller: Address, job_id: u64) {
+    pub fn raise_dispute(
+        e: Env,
+        caller: Address,
+        job_id: u64,
+        evidence_hash: Option<BytesN<32>>,
+        reason_preview: Option<BytesN<64>>,
+    ) {
         let mut job = get_job_or_panic(&e, job_id);
         caller.require_auth();
 
@@ -417,12 +437,40 @@ impl EscrowContract {
             panic_with_error!(&e, Error::Unauthorized);
         }
 
+        let zero_hash = BytesN::from_array(&e, &[0u8; 32]);
+        let default_reason = BytesN::from_array(&e, &[0u8; 64]);
+
+        let final_hash = match evidence_hash {
+            Option::Some(h) if h != zero_hash => h,
+            _ => zero_hash.clone(),
+        };
+        let final_reason = match reason_preview {
+            Option::Some(r) if r != default_reason => r,
+            _ => default_reason,
+        };
+
+        let evidence = DisputeEvidence {
+            evidence_hash: final_hash.clone(),
+            raised_at: e.ledger().timestamp(),
+            reason_preview: final_reason,
+        };
+        e.storage()
+            .persistent()
+            .set(&DataKey::DisputeEvidence(job_id), &evidence);
+        e.storage().persistent().extend_ttl(
+            &DataKey::DisputeEvidence(job_id),
+            ACTIVE_JOB_LIFETIME_THRESHOLD,
+            ACTIVE_JOB_BUMP_AMOUNT,
+        );
+
         job.status = JobStatus::Disputed;
         set_job(&e, job_id, &job);
         bump_instance_ttl(&e);
 
-        e.events()
-            .publish((Symbol::new(&e, "job_disputed"),), (job_id, caller));
+        e.events().publish(
+            (Symbol::new(&e, "job_disputed"),),
+            (job_id, caller, final_hash),
+        );
     }
 
     /// Resolve a disputed job.
@@ -524,6 +572,12 @@ impl EscrowContract {
 
     pub fn get_job(e: Env, job_id: u64) -> Job {
         get_job_or_panic(&e, job_id)
+    }
+
+    pub fn get_dispute_evidence(e: Env, job_id: u64) -> Option<DisputeEvidence> {
+        e.storage()
+            .persistent()
+            .get::<DataKey, DisputeEvidence>(&DataKey::DisputeEvidence(job_id))
     }
 
     pub fn get_jobs_batch(e: Env, start: u64, limit: u32) -> Vec<Job> {
@@ -1699,7 +1753,7 @@ mod test {
             &native_token,
         );
         client.accept_job(&freelancer, &job_id);
-        client.raise_dispute(&user, &job_id);
+        client.raise_dispute(&user, &job_id, &None, &None);
         assert_eq!(client.get_job(&job_id).status, JobStatus::Disputed);
 
         // client_bps = 10_000 → full refund to client
@@ -1722,7 +1776,7 @@ mod test {
         );
         client.accept_job(&freelancer, &job_id);
         client.submit_work(&freelancer, &job_id);
-        client.raise_dispute(&user, &job_id);
+        client.raise_dispute(&user, &job_id, &None, &None);
 
         let token_client = token::Client::new(&env, &native_token);
         let pre_balance = token_client.balance(&freelancer);
@@ -1748,7 +1802,7 @@ mod test {
             &native_token,
         );
         client.accept_job(&freelancer, &job_id);
-        client.raise_dispute(&freelancer, &job_id);
+        client.raise_dispute(&freelancer, &job_id, &None, &None);
         client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 10_000 });
 
         let events = env.events().all();
@@ -1954,7 +2008,7 @@ mod test {
             &native_token,
         );
         client.accept_job(&freelancer, &job_id);
-        client.raise_dispute(&user, &job_id);
+        client.raise_dispute(&user, &job_id, &None, &None);
 
         let token_client = token::Client::new(&env, &native_token);
         let client_pre = token_client.balance(&user);
@@ -1984,7 +2038,7 @@ mod test {
             &native_token,
         );
         client.accept_job(&freelancer, &job_id);
-        client.raise_dispute(&freelancer, &job_id);
+        client.raise_dispute(&freelancer, &job_id, &None, &None);
 
         let token_client = token::Client::new(&env, &native_token);
         let client_pre = token_client.balance(&user);
@@ -2014,7 +2068,7 @@ mod test {
             &native_token,
         );
         client.accept_job(&freelancer, &job_id);
-        client.raise_dispute(&user, &job_id);
+        client.raise_dispute(&user, &job_id, &None, &None);
 
         // Disable mock auths so the non-admin call actually fails
         let env2 = Env::default();
@@ -2086,7 +2140,7 @@ mod test {
             &native_token,
         );
         client.accept_job(&freelancer, &job_id);
-        client.raise_dispute(&user, &job_id);
+        client.raise_dispute(&user, &job_id, &None, &None);
 
         // freelancer wins entirely
         client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 0 });
@@ -2114,7 +2168,7 @@ mod test {
             &native_token,
         );
         client.accept_job(&freelancer, &job_id);
-        client.raise_dispute(&user, &job_id);
+        client.raise_dispute(&user, &job_id, &None, &None);
         client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 5_000 });
 
         let events = env.events().all();
@@ -2437,7 +2491,7 @@ mod test {
             &native_token,
         );
         client.accept_job(&freelancer, &job_id);
-        client.raise_dispute(&user, &job_id);
+        client.raise_dispute(&user, &job_id, &None, &None);
         client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 0 });
         assert_eq!(client.get_completed_jobs_count(), 1);
     }
@@ -2538,7 +2592,7 @@ mod test {
             &native_token,
         );
         client.accept_job(&freelancer, &job_id3);
-        client.raise_dispute(&user, &job_id3);
+        client.raise_dispute(&user, &job_id3, &None, &None);
         client.resolve_dispute(&job_id3, &DisputeResolution { client_bps: 10_000 });
         assert_eq!(client.get_cancelled_jobs_count(), 3);
     }
@@ -2578,7 +2632,7 @@ mod test {
             &native_token,
         );
         client.accept_job(&freelancer, &job_id);
-        client.raise_dispute(&user, &job_id);
+        client.raise_dispute(&user, &job_id, &None, &None);
 
         assert_eq!(client.get_cancelled_jobs_count(), 0);
         client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 10_000 });
@@ -2665,14 +2719,14 @@ mod test {
 
         // Complete j3 via dispute resolution (freelancer wins)
         client.accept_job(&freelancer, &j3);
-        client.raise_dispute(&user, &j3);
+        client.raise_dispute(&user, &j3, &None, &None);
         client.resolve_dispute(&j3, &DisputeResolution { client_bps: 0 });
         assert_eq!(client.get_completed_jobs_count(), 2);
         assert_eq!(client.get_cancelled_jobs_count(), 1);
 
         // Cancel j4 via dispute resolution (client wins)
         client.accept_job(&freelancer, &j4);
-        client.raise_dispute(&user, &j4);
+        client.raise_dispute(&user, &j4, &None, &None);
         client.resolve_dispute(&j4, &DisputeResolution { client_bps: 10_000 });
         assert_eq!(client.get_completed_jobs_count(), 2);
         assert_eq!(client.get_cancelled_jobs_count(), 2);
@@ -2853,7 +2907,7 @@ mod test {
                 &native_token,
             );
             client.accept_job(&freelancer, &job_id);
-            client.raise_dispute(&user, &job_id);
+            client.raise_dispute(&user, &job_id, &None, &None);
             assert_eq!(client.get_job(&job_id).status, JobStatus::Disputed);
         }
 
@@ -2921,7 +2975,7 @@ mod test {
             );
             client.accept_job(&freelancer, &job_id);
             client.submit_work(&freelancer, &job_id);
-            client.raise_dispute(&freelancer, &job_id);
+            client.raise_dispute(&freelancer, &job_id, &None, &None);
             assert_eq!(client.get_job(&job_id).status, JobStatus::Disputed);
         }
 
@@ -2967,7 +3021,7 @@ mod test {
             expect_panic_with_contract_error(|| client.reject_work(&user, &job_id), 3);
             expect_panic_with_contract_error(|| client.cancel_job(&user, &job_id), 3);
             expect_panic_with_contract_error(|| client.enforce_deadline(&user, &job_id), 3);
-            expect_panic_with_contract_error(|| client.raise_dispute(&user, &job_id), 3);
+            expect_panic_with_contract_error(|| client.raise_dispute(&user, &job_id, &None, &None), 3);
             expect_panic_with_contract_error(
                 || client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 10_000 }),
                 3,
@@ -2992,7 +3046,7 @@ mod test {
             expect_panic_with_contract_error(|| client.reject_work(&user, &job_id), 3);
             expect_panic_with_contract_error(|| client.cancel_job(&user, &job_id), 3);
             expect_panic_with_contract_error(|| client.enforce_deadline(&user, &job_id), 3);
-            expect_panic_with_contract_error(|| client.raise_dispute(&user, &job_id), 3);
+            expect_panic_with_contract_error(|| client.raise_dispute(&user, &job_id, &None, &None), 3);
             expect_panic_with_contract_error(
                 || client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 10_000 }),
                 3,
@@ -3011,7 +3065,7 @@ mod test {
                 &native_token,
             );
             client.accept_job(&freelancer, &job_id);
-            client.raise_dispute(&user, &job_id);
+            client.raise_dispute(&user, &job_id, &None, &None);
             client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 0 });
             assert_eq!(client.get_job(&job_id).status, JobStatus::Completed);
         }
@@ -3026,7 +3080,7 @@ mod test {
                 &native_token,
             );
             client.accept_job(&freelancer, &job_id);
-            client.raise_dispute(&freelancer, &job_id);
+            client.raise_dispute(&freelancer, &job_id, &None, &None);
             client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 10_000 });
             assert_eq!(client.get_job(&job_id).status, JobStatus::Cancelled);
         }
@@ -3043,14 +3097,14 @@ mod test {
                 &native_token,
             );
             client.accept_job(&freelancer, &job_id);
-            client.raise_dispute(&freelancer, &job_id);
+            client.raise_dispute(&freelancer, &job_id, &None, &None);
             expect_panic_with_contract_error(|| client.accept_job(&freelancer, &job_id), 3);
             expect_panic_with_contract_error(|| client.submit_work(&freelancer, &job_id), 3);
             expect_panic_with_contract_error(|| client.approve_work(&user, &job_id), 3);
             expect_panic_with_contract_error(|| client.reject_work(&user, &job_id), 3);
             expect_panic_with_contract_error(|| client.cancel_job(&user, &job_id), 3);
             expect_panic_with_contract_error(|| client.enforce_deadline(&user, &job_id), 3);
-            expect_panic_with_contract_error(|| client.raise_dispute(&user, &job_id), 3);
+            expect_panic_with_contract_error(|| client.raise_dispute(&user, &job_id, &None, &None), 3);
         }
     }
 
@@ -3151,7 +3205,7 @@ mod test {
 
         let job_id = client.post_job(&user, &amount, &hash(&env), &32u32, &0u64, &native_token);
         client.accept_job(&freelancer, &job_id);
-        client.raise_dispute(&user, &job_id);
+        client.raise_dispute(&user, &job_id, &None, &None);
 
         let pre_freelancer = token_client.balance(&freelancer);
         client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 0 });
@@ -4143,7 +4197,7 @@ mod test {
             &native_token,
         );
         // Only InProgress and SubmittedForReview are disputable; Open must panic.
-        client.raise_dispute(&user, &job_id);
+        client.raise_dispute(&user, &job_id, &None, &None);
     }
 
     /// raise_dispute on a Completed job must panic with InvalidStatus.
@@ -4163,7 +4217,7 @@ mod test {
         client.submit_work(&freelancer, &job_id);
         client.approve_work(&user, &job_id);
         // Completed jobs have been finalised; dispute is no longer possible.
-        client.raise_dispute(&user, &job_id);
+        client.raise_dispute(&user, &job_id, &None, &None);
     }
 
     /// raise_dispute on a Cancelled job must panic with InvalidStatus.
@@ -4181,7 +4235,7 @@ mod test {
         );
         client.cancel_job(&user, &job_id);
         // Cancelled jobs are final; dispute cannot be raised.
-        client.raise_dispute(&user, &job_id);
+        client.raise_dispute(&user, &job_id, &None, &None);
     }
 
     /// raise_dispute on an already Disputed job must panic with InvalidStatus.
@@ -4198,9 +4252,9 @@ mod test {
             &native_token,
         );
         client.accept_job(&freelancer, &job_id);
-        client.raise_dispute(&freelancer, &job_id);
+        client.raise_dispute(&freelancer, &job_id, &None, &None);
         // A second raise_dispute on the same Disputed job must panic.
-        client.raise_dispute(&user, &job_id);
+        client.raise_dispute(&user, &job_id, &None, &None);
     }
 
     /// After a failed raise_dispute call, the job state and escrow balance
@@ -4224,7 +4278,7 @@ mod test {
 
         // Attempt raise_dispute on Open job — must panic
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.raise_dispute(&user, &job_id);
+            client.raise_dispute(&user, &job_id, &None, &None);
         }));
         assert!(result.is_err(), "raise_dispute must panic on Open job");
 
@@ -5522,5 +5576,167 @@ mod test {
         // contract balance drops by the payout only (the fee stays in escrow
         // as accrued fees, not transferred out).
         assert_eq!(escrow_pre - token_client.balance(&contract_address), payout);
+    }
+
+    // ── Issue #8: raise_dispute evidence parameter tests ─────────────────────
+
+    #[test]
+    fn raise_dispute_with_evidence_stores_and_retrieves() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+
+        let evidence_hash = BytesN::from_array(&env, &[1u8; 32]);
+        let reason_preview = BytesN::from_array(&env, &[2u8; 64]);
+
+        client.raise_dispute(&user, &job_id, &Some(evidence_hash.clone()), &Some(reason_preview.clone()));
+
+        let evidence = client.get_dispute_evidence(&job_id);
+        assert!(evidence.is_some());
+        let ev = evidence.unwrap();
+        assert_eq!(ev.evidence_hash, evidence_hash);
+        assert_eq!(ev.reason_preview, reason_preview);
+        assert!(ev.raised_at > 0);
+    }
+
+    #[test]
+    fn raise_dispute_without_evidence_backward_compatible() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+
+        client.raise_dispute(&user, &job_id, &None, &None);
+
+        let evidence = client.get_dispute_evidence(&job_id);
+        assert!(evidence.is_some());
+        let ev = evidence.unwrap();
+        assert_eq!(ev.evidence_hash, BytesN::from_array(&env, &[0u8; 32]));
+        assert_eq!(ev.reason_preview, BytesN::from_array(&env, &[0u8; 64]));
+    }
+
+    #[test]
+    fn get_dispute_evidence_returns_none_for_nonexistent() {
+        let (_, client, _, _, _, _) = setup();
+        let evidence = client.get_dispute_evidence(&999);
+        assert!(evidence.is_none());
+    }
+
+    #[test]
+    fn raise_dispute_emits_evidence_hash_in_event() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+
+        let evidence_hash = BytesN::from_array(&env, &[5u8; 32]);
+        client.raise_dispute(&user, &job_id, &Some(evidence_hash.clone()), &None);
+
+        let events = env.events().all();
+        assert!(!events.is_empty(), "events must be emitted on raise_dispute");
+    }
+
+    #[test]
+    fn raise_dispute_evidence_persists_after_resolution() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+
+        let evidence_hash = BytesN::from_array(&env, &[3u8; 32]);
+        client.raise_dispute(&user, &job_id, &Some(evidence_hash.clone()), &None);
+
+        client.resolve_dispute(&job_id, &DisputeResolution { client_bps: 5_000 });
+
+        let evidence = client.get_dispute_evidence(&job_id);
+        assert!(evidence.is_some());
+        assert_eq!(evidence.unwrap().evidence_hash, evidence_hash);
+    }
+
+    #[test]
+    fn raise_dispute_zero_hash_treated_as_no_evidence() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+
+        let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
+        client.raise_dispute(&user, &job_id, &Some(zero_hash), &None);
+
+        let evidence = client.get_dispute_evidence(&job_id).unwrap();
+        assert_eq!(evidence.evidence_hash, BytesN::from_array(&env, &[0u8; 32]));
+    }
+
+    #[test]
+    fn raise_dispute_partial_evidence_only_hash() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+
+        let evidence_hash = BytesN::from_array(&env, &[7u8; 32]);
+        client.raise_dispute(&user, &job_id, &Some(evidence_hash.clone()), &None);
+
+        let evidence = client.get_dispute_evidence(&job_id).unwrap();
+        assert_eq!(evidence.evidence_hash, evidence_hash);
+        assert_eq!(evidence.reason_preview, BytesN::from_array(&env, &[0u8; 64]));
+    }
+
+    #[test]
+    fn raise_dispute_partial_evidence_only_reason() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+        let job_id = client.post_job(
+            &user,
+            &1_000_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+
+        let reason = BytesN::from_array(&env, &[8u8; 64]);
+        client.raise_dispute(&user, &job_id, &None, &Some(reason.clone()));
+
+        let evidence = client.get_dispute_evidence(&job_id).unwrap();
+        assert_eq!(evidence.evidence_hash, BytesN::from_array(&env, &[0u8; 32]));
+        assert_eq!(evidence.reason_preview, reason);
     }
 }
