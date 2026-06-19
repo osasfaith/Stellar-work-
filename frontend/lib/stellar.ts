@@ -4,7 +4,6 @@ import {
   Account,
   BASE_FEE,
   Contract,
-  Keypair,
   Networks,
   nativeToScVal,
   rpc,

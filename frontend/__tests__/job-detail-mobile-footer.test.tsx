@@ -243,6 +243,7 @@ describe("Job Detail Mobile Footer", () => {
 
     // Mock acceptJob to simulate loading state
     const { acceptJob } = await import("@/lib/contract");
+    // eslint-disable-next-line @typescript-eslint/no-empty-function
     vi.mocked(acceptJob).mockImplementation(() => new Promise(() => {})); // Never resolves
 
     const JobDetailPage = (await import("@/app/job/[id]/page")).default;

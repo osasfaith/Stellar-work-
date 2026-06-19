@@ -18,6 +18,7 @@ vi.mock("@stellar/stellar-sdk", () => {
   class _Account {
     constructor(public id: string, public sequence: string) {}
     accountId() { return this.id; }
+    // eslint-disable-next-line @typescript-eslint/no-empty-function
     incrementSequenceNumber() {}
     sequenceNumber() { return this.sequence; }
   }
@@ -80,6 +81,7 @@ describe("callContract sendTransaction error path", () => {
     getAccount.mockResolvedValue({
       id: "GWALLET",
       accountId: () => "GWALLET",
+      // eslint-disable-next-line @typescript-eslint/no-empty-function
       incrementSequenceNumber: () => {},
       sequenceNumber: () => "0",
     });

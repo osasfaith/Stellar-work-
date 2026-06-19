@@ -12,13 +12,13 @@ const signTransactionSpy = vi.fn();
 
 const isAllowedMock = vi.fn();
 const getAddressMock = vi.fn();
-const requestAccessMock = vi.fn();
 
 class FakeAccount {
   constructor(public id: string, public sequence: string) {}
   accountId() {
     return this.id;
   }
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
   incrementSequenceNumber() {}
   sequenceNumber() {
     return this.sequence;
