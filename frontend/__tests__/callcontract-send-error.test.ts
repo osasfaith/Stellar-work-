@@ -18,13 +18,8 @@ vi.mock("@stellar/stellar-sdk", () => {
   class _Account {
     constructor(public id: string, public sequence: string) {}
     accountId() { return this.id; }
-<<<<<<< HEAD
     // eslint-disable-next-line @typescript-eslint/no-empty-function
     incrementSequenceNumber() {}
-=======
-    // eslint-disable-next-line @typescript-eslint/no-empty-function
-    incrementSequenceNumber() {}
->>>>>>> main
     sequenceNumber() { return this.sequence; }
   }
   class _Contract {
@@ -86,13 +81,8 @@ describe("callContract sendTransaction error path", () => {
     getAccount.mockResolvedValue({
       id: "GWALLET",
       accountId: () => "GWALLET",
-<<<<<<< HEAD
       // eslint-disable-next-line @typescript-eslint/no-empty-function
       incrementSequenceNumber: () => {},
-=======
-      // eslint-disable-next-line @typescript-eslint/no-empty-function
-      incrementSequenceNumber: () => {},
->>>>>>> main
       sequenceNumber: () => "0",
     });
     // Simulation succeeds so we reach the send step
